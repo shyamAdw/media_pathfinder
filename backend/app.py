@@ -21,6 +21,7 @@ def authenticate_google_ads():
 
 @app.route('/api/data', methods=['GET'])
 def get_data():
+    global ads_client
     if not ads_client:
         return jsonify({'error': 'Not authenticated'}), 401
 
@@ -41,6 +42,7 @@ def get_data():
 
 @app.route('/api/drilldown', methods=['GET'])
 def drill_down():
+    global ads_client
     if not ads_client:
         return jsonify({'error': 'Not authenticated'}), 401
 

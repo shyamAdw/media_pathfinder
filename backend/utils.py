@@ -2,13 +2,28 @@ import networkx as nx
 
 def build_graph(data):
     graph = nx.DiGraph()
+    
+    # Create a mapping of campaign_id to campaign_name for later use
+    campaign_map = {}
     for item in data:
-        # Add nodes and edges based on your data structure
-        # Example:
-        graph.add_node(item['campaign_id'], type='campaign', name=item['campaign_name'], spend=item['cost'])
+        if item['campaign_id'] not in campaign_map:
+            campaign_map[item['campaign_id']] = item['campaign_name']
+        
+        # Add campaign node if it doesn't exist
+        if not graph.has_node(item['campaign_id']):
+            graph.add_node(item['campaign_id'], type='campaign', name=item['campaign_name'], spend=0)  # Initialize spend
+
+    for item in data:
+        # Add match type node and edge
         if 'match_type' in item:
-            graph.add_node(item['match_type'], type='match_type', spend=item['cost'])
-            graph.add_edge(item['campaign_id'], item['match_type'])
+            match_type_node_id = f"{item['campaign_id']}-{item['match_type']}"
+            if not graph.has_node(match_type_node_id):
+                graph.add_node(match_type_node_id, type='match_type', name=item['match_type'], spend=item['cost'])
+                graph.add_edge(item['campaign_id'], match_type_node_id)
+            
+            # Update campaign spend
+            graph.nodes[item['campaign_id']]['spend'] += item['cost']
+
     return graph
 
 def aggregate_data(graph, node_id=None):
@@ -42,7 +57,7 @@ def aggregate_data(graph, node_id=None):
                 'children': [] if graph.nodes[child]['type'] == 'match_type' else None
             })
         return {'name': graph.nodes[node_id]['name'], 'id': node_id, 'children': children_data}
-
+        
 
 def filter_data(graph, node_id):
     # Filter data based on node_id

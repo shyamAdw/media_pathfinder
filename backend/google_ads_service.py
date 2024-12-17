@@ -1,87 +1,94 @@
-from google_ads import adwords
-import os
+from google.ads.googleads.client import GoogleAdsClient
+from google.ads.googleads.errors import GoogleAdsException
 
 def authenticate(authorization_code):
+    """Authenticates with the Google Ads API using an authorization code."""
     try:
-        oauth2_client = adwords.AdWordsClient.LoadFromStorage('googleads.yaml')
-        oauth2_client.oauth2_client.Authorize(auth_code=authorization_code)
-        return oauth2_client
+        googleads_client = GoogleAdsClient.load_from_storage('google-ads.yaml')
+        googleads_client.oath2_client.authorize(auth_code=authorization_code)
+        return googleads_client
     except Exception as e:
         print(f"An error occurred during authentication: {e}")
         return None
 
 def fetch_data(client, customer_id, campaign_status):
-    # Use the Google Ads API client to fetch data
-    # Construct AWQL or GAQL queries based on requirements
-    # Example using AWQL (replace with GAQL for Google Ads API)
-    client.SetClientCustomerId(customer_id)
-    campaign_service = client.GetService('CampaignService', version='v201809')
+    """Fetches campaign and match type data from the Google Ads API."""
+    try:
+        ga_service = client.get_service("GoogleAdsService")
 
-    selector = {
-        'fields': ['Id', 'Name', 'Status', 'AdvertisingChannelType', 'Cost'],
-        'predicates': [
-            {
-                'field': 'Status',
-                'operator': 'EQUALS',
-                'values': [campaign_status]
-            }
-        ],
-        'dateRange': {'min': '20230101', 'max': '20231231'} # Fixed date range for MVP
-    }
+        # GAQL query to fetch campaign data
+        campaign_query = f"""
+            SELECT
+                campaign.id,
+                campaign.name,
+                campaign.status,
+                campaign.advertising_channel_type,
+                metrics.cost_micros
+            FROM
+                campaign
+            WHERE
+                campaign.status = '{campaign_status}'
+                AND segments.date DURING LAST_30_DAYS
+            """
 
-    campaigns = campaign_service.get(selector)['entries']
+        # Issues a search request using streaming for campaigns.
+        campaign_stream = ga_service.search_stream(
+            customer_id=customer_id, query=campaign_query
+        )
 
-    ad_group_service = client.GetService('AdGroupService', version='v201809')
-    all_campaign_data = []
+        all_campaign_data = []
+        for campaign_batch in campaign_stream:
+            for campaign_row in campaign_batch.results:
+                campaign = campaign_row.campaign
+                metrics = campaign_row.metrics
 
-    for campaign in campaigns:
-        selector = {
-            'fields': ['Id', 'Name', 'Status', 'CpcBid', 'Cost'],
-            'predicates': [
-                {
-                    'field': 'CampaignId',
-                    'operator': 'EQUALS',
-                    'values': [campaign['id']]
-                },
-                {
-                    'field': 'Status',
-                    'operator': 'IN',
-                    'values': ['ENABLED', 'PAUSED']
-                }
-            ],
-            'dateRange': {'min': '20230101', 'max': '20231231'}
-        }
-        ad_groups = ad_group_service.get(selector)['entries']
+                # GAQL query to fetch ad group and match type data
+                ad_group_query = f"""
+                    SELECT
+                        ad_group.id,
+                        ad_group.name,
+                        ad_group.status,
+                        metrics.cost_micros,
+                        ad_group_criterion.type,
+                        ad_group_criterion.keyword.match_type
+                    FROM
+                        ad_group_criterion
+                    WHERE
+                        ad_group.status IN ('ENABLED', 'PAUSED')
+                        AND campaign.id = {campaign.id}
+                        AND ad_group_criterion.type = 'KEYWORD'
+                        AND segments.date DURING LAST_30_DAYS
+                    """
 
-        ad_group_criterion_service = client.GetService('AdGroupCriterionService', version='v201809')
+                # Issues a search request using streaming for ad groups.
+                ad_group_stream = ga_service.search_stream(
+                    customer_id=customer_id, query=ad_group_query
+                )
 
-        for ad_group in ad_groups:
-            selector = {
-                'fields': ['KeywordMatchType', 'CpcBid', 'Status', 'Cost'],
-                'predicates': [
-                    {
-                        'field': 'AdGroupId',
-                        'operator': 'EQUALS',
-                        'values': [ad_group['id']]
-                    },
-                    {
-                        'field': 'CriteriaType',
-                        'operator': 'EQUALS',
-                        'values': ['KEYWORD']
-                    }
-                ],
-                'dateRange': {'min': '20230101', 'max': '20231231'}
-            }
+                for ad_group_batch in ad_group_stream:
+                    for ad_group_row in ad_group_batch.results:
+                        ad_group = ad_group_row.ad_group
+                        ad_group_criterion = ad_group_row.ad_group_criterion
+                        
 
-            criteria = ad_group_criterion_service.get(selector)
-            if 'entries' in criteria:
-                for criterion in criteria['entries']:
-                    campaign_data = {
-                        'campaign_id': campaign['id'],
-                        'campaign_name': campaign['name'],
-                        'campaign_type': campaign['advertisingChannelType'],
-                        'cost': int(criterion['biddingStrategyConfiguration']['bids'][0]['bid']['microAmount']) / 1000000 if 'biddingStrategyConfiguration' in criterion and 'bids' in criterion['biddingStrategyConfiguration'] and len(criterion['biddingStrategyConfiguration']['bids']) > 0 and 'bid' in criterion['biddingStrategyConfiguration']['bids'][0] and 'microAmount' in criterion['biddingStrategyConfiguration']['bids'][0]['bid'] else 0,
-                        'match_type': criterion['matchType']
-                    }
-                    all_campaign_data.append(campaign_data)
-    return all_campaign_data
+                        all_campaign_data.append({
+                            "campaign_id": campaign.id,
+                            "campaign_name": campaign.name,
+                            "campaign_type": campaign.advertising_channel_type.name,
+                            "cost": metrics.cost_micros / 1000000,
+                            "match_type": ad_group_criterion.keyword.match_type.name if ad_group_criterion.type == client.enums.CriterionTypeEnum.KEYWORD else "N/A"
+                        })
+
+        return all_campaign_data
+
+    except GoogleAdsException as ex:
+        print(
+            f'Request with ID "{ex.request_id}" failed with status '
+            f'"{ex.error.code().name}" and includes the following errors:'
+        )
+        for error in ex.failure.errors:
+            print(f'\tError with message "{error.message}".')
+            if error.location:
+                for field_path_element in error.location.field_path_elements:
+                    print(f"\t\tOn field: {field_path_element.field_name}")
+        return []

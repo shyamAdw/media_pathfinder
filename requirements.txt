@@ -1,5 +1,5 @@
 Flask==2.2.2
 Flask-Cors==3.0.10
-google-ads==19.1.0
+google-ads>=22.1.0
 networkx==3.0
 python-dotenv==1.0.0
